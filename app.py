@@ -402,6 +402,34 @@ def update_records(u, fish_obj):
         }
 
 # -----------------------------
+# 장소별 미끼 확인/차감 헬퍼 ------------------------------------
+def _bait_keys_for_location(u):
+    """현재 장소에 따라 (필수미끼, 비해당미끼)를 반환"""
+    loc = u.get("location")
+    if loc == "바다":
+        return "지렁이", "떡밥"
+    if loc == "민물":
+        return "떡밥", "지렁이"
+    return None, None
+
+def ensure_bait_and_consume(u):
+    """
+    장소에 맞는 미끼가 1개 이상 있는지 확인하고,
+    있으면 즉시 1개 차감. 없으면 False와 안내문 반환.
+    """
+    need, _ = _bait_keys_for_location(u)
+    if not need:
+        return False, "⚠️ 먼저 /장소 [바다|민물] 을 설정하세요."
+
+    inv = u.setdefault("inventory", {})
+    have = inv.get(need, 0)
+    if have <= 0:
+        return False, f"⚠️ {need}가 없어 '{u.get('location')}'에서 낚시할 수 없습니다.\n/상점 에서 {need}를 구매해 주세요."
+
+    # 장소에 맞는 미끼만 정확히 1개 차감 (다른 미끼는 절대 소모하지 않음)
+    inv[need] = max(0, have - 1)
+    return True, f"✅ {need} 1개 사용됨 (남은 {need}: {inv[need]}개)"
+# --------------------------------------------------------------
 # 낚시 흐름(간단)
 # -----------------------------
 def handle_cast(u, seconds:int):
