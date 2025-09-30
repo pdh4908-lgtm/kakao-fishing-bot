@@ -1,4 +1,4 @@
-# app.py (fully fixed, owner allowlist)
+# app.py (no-access-toggle version)
 import os
 import time
 import threading
@@ -39,22 +39,9 @@ def skill():
     msg = normalize(utter)
 
     try:
-        # ── 채널 기능 접근 제어 ─────────────────────────────
+        # ── 안내: 입어가능/해제 기능 제거 ─────────────────────
         if msg in ("/입어가능", "/입어해제"):
-            # 채널 주인으로 인정할 닉네임 목록
-            owners = ["pdh4908", "박동희"]
-            caller = user_name
-            if caller not in owners:
-                return KakaoResp.text("⚠️ 접근 권한이 없습니다.\n'/입어가능'과 '/입어해제'는 채널 주인(@pdh4908, @박동희)만 사용할 수 있습니다.")
-            if msg == "/입어가능":
-                return KakaoResp.text(game.cmd_enable_access(user_id))
-            else:
-                return KakaoResp.text(game.cmd_disable_access(user_id))
-
-        # 접근 활성화 여부 확인
-        meta = game.store.get_meta()
-        if not meta.get("access_enabled") and msg not in ("/입어가능", "/입어해제"):
-            return KakaoResp.text("채널 주인이 /입어가능 을 입력해야 합니다. (활성화 전에는 어떤 기능도 사용할 수 없습니다)")
+            return KakaoResp.text("본 채널은 이제 별도 활성화 없이 바로 사용 가능합니다. '/' 를 입력해 도움말을 확인하세요.")
 
         # ── 홈/도움 ────────────────────────────────────────
         if msg in ("/", "/help", "/도움", "/명령", "/?"):
