@@ -31,7 +31,8 @@ RESTRICTED_ALLOWED = {"지렁이","떡밥"}
 
 STRICT_CMDS = {
     "/", "/상점", "/전부판매", "/출석", "/초보자찬스",
-    "/릴감기", "/판매확인", "/판매취소", "/기록"
+    "/릴감기", "/판매확인", "/판매취소", "/기록",
+    "/상태", "/가방"  # ← 추가
 }
 PREFIX_CMDS = {
     "/닉네임 ", "/구매 ", "/아이템판매 ", "/낚시 ", "/장소 ",
@@ -110,11 +111,24 @@ def get_user(store,uid):
 # -----------------------------
 # 유틸
 # -----------------------------
-def kakao_text(t): return jsonify({"version":"2.0","template":{"outputs":[{"simpleText":{"text":t}}]}})
+def kakao_text(t): 
+    return jsonify({"version":"2.0","template":{"outputs":[{"simpleText":{"text":t}}]}})
+
 def fmt_money(g,r): return f"Gold: 💰{g:,} | 제한골드: 💰{r:,}"
 def is_night(now=None): 
     now=now or datetime.now(); t=now.time()
     return (t>=time(20,0)) or (t<time(5,0))
+
+def menu_text(u)->str:
+    lines=[]
+    lines.append(f"[{u.get('nickname') or '손님'}] {get_title(u['level'])} Lv.{u['level']}  EXP {u['exp']}/{level_threshold(u['level'])}")
+    lines.append(fmt_money(u['gold'], u['restricted_gold']))
+    lines.append(f"가방: {len(u['fish'])}/{BAG_CAP}칸 | 장소: {u['location'] or '미설정'}")
+    lines.append("")
+    lines.append("• 1줄: /상태, /가방")
+    lines.append("• 2줄: /상점, /구매 [이름] [수량], /아이템판매 [이름] [수량], /전부판매")
+    lines.append("• 3줄: /출석, /초보자찬스(낚린이 전용), /장소 [바다|민물], /낚시 [1~60]s, /릴감기, /기록")
+    return "\n".join(lines)
 
 # -----------------------------
 # 확률 계산
@@ -163,7 +177,9 @@ def handle_reel(u):
     for k,v in prob.items():
         cum+=v
         if roll<=cum: outcome=k; break
-    if outcome=="실패": return "🎣 낚시 실패..."
+    if outcome=="실패": 
+        u["casting"]=None
+        return "🎣 낚시 실패..."
     loc=u["location"]; fishlist=FISH_POOL[loc][outcome]
     name,smin,smax=random.choice(fishlist); cm=random.randint(smin,smax)
     price=cm*(1 if outcome=="소형" else (100 if outcome=="중형" else 1000))
@@ -180,6 +196,39 @@ def handle_reel(u):
     while u["exp"]>=level_threshold(u["level"]):
         u["exp"]-=level_threshold(u["level"]); u["level"]+=1
     return f"🎣 {name} {cm}cm ({outcome})!\n가격:💰{price} | EXP:+{exp}"
+
+# -----------------------------
+# 상태/가방
+# -----------------------------
+def handle_status(u)->str:
+    lines = [
+        f"[{u.get('nickname') or '손님'}] {get_title(u['level'])} Lv.{u['level']}  EXP {u['exp']}/{level_threshold(u['level'])}",
+        fmt_money(u['gold'], u['restricted_gold']),
+        f"장소: {u['location'] or '미설정'} | 낚싯대: {u.get('rod','미보유')}",
+        f"가방: {len(u['fish'])}/{BAG_CAP}칸",
+    ]
+    return "\n".join(lines)
+
+def handle_bag(u)->str:
+    lines=[]
+    if u["inventory"]:
+        lines.append("🎒 보유 아이템")
+        for name,qty in u["inventory"].items():
+            tip=""
+            if name.startswith("케미라이트"): tip=" (밤에 확률 소폭↑)"
+            if name=="집어제": tip=" (중형/대형 확률 보정)"
+            lines.append(f"- {name} ×{qty}{tip}")
+    else:
+        lines.append("🎒 보유 아이템 없음")
+    if u["fish"]:
+        lines.append("")
+        lines.append("🪱 가방(잡은 물고기)")
+        for f in u["fish"]:
+            lines.append(f"- {f['name']} {f['cm']}cm | {f['location']} | {f['caught_at']} | 가격:{f['price']}")
+    else:
+        lines.append("")
+        lines.append("🪱 가방에 물고기 없음")
+    return "\n".join(lines)
 
 # -----------------------------
 # 거래 기능
@@ -241,58 +290,83 @@ def skill():
             nickname=utt.replace("/닉네임 ","",1).strip()
             u["nickname"]=nickname; u["nick_locked"]=True
             text=f"닉네임 '{nickname}' 설정 완료!"
-        elif utt=="/": text="닉네임을 먼저 설정하세요. /닉네임 [이름]"
-        else: text=""
-    elif utt.startswith("/낚시"):
-        try: sec=int(''.join(ch for ch in utt if ch.isdigit())); text=handle_cast(u,sec)
-        except: text="형식: /낚시 [1~60]s"
-    elif utt=="/릴감기": text=handle_reel(u)
-    elif utt=="/출석":
-        today=today_str()
-        if u["attendance_last"]==today: text="이미 출석함"
+        elif utt=="/":
+            text="닉네임을 먼저 설정하세요. /닉네임 [이름]"
         else:
-            u["attendance_last"]=today; title=get_title(u["level"]); reward=title_attendance_reward(title)
-            if title=="낚린이":
-                before=u["restricted_gold"]; after=min(RESTRICTED_CAP,before+reward); gained=after-before
-                u["restricted_gold"]=after
-                if gained==0: text="제한골드 상한"
-                else: text=f"출석보상 {gained} 지급"
+            text=""
+    else:
+        # 닉네임 설정 완료 유저의 '/' → 메인 메뉴
+        if utt=="/":
+            text = menu_text(u)
+        elif utt.startswith("/낚시"):
+            try:
+                sec=int(''.join(ch for ch in utt if ch.isdigit()))
+                text=handle_cast(u,sec)
+            except:
+                text="형식: /낚시 [1~60]s"
+        elif utt=="/릴감기":
+            text=handle_reel(u)
+        elif utt=="/출석":
+            today=today_str()
+            if u["attendance_last"]==today:
+                text="이미 출석함"
             else:
-                u["restricted_gold"]+=reward; text=f"출석보상 {reward} 지급"
-    elif utt=="/전부판매": text=sell_all_fish(u)
-    elif utt=="/판매확인": text=confirm_resell(u,True)
-    elif utt=="/판매취소": text=confirm_resell(u,False)
-    elif utt.startswith("/아이템판매"):
-        parts=utt.split(); 
-        if len(parts)<3: text="형식: /아이템판매 [이름] [수량]"
-        else:
-            name=" ".join(parts[1:-1]); qty=int(parts[-1]); text=start_resell(u,name,qty)
-    elif utt.startswith("/구매 "):
-        parts=utt.split()
-        if len(parts)<3: text="형식: /구매 [이름] [수량]"
-        else:
-            name=" ".join(parts[1:-1]); qty=int(parts[-1]); ok,msg=try_buy(u,name,qty); text=msg
-    elif utt=="/기록":
-        rec=u["records"]; mn=rec.get("min"); mx=rec.get("max"); lines=[]
-        lines.append(f"[최대] {mx['name']} {mx['cm']}cm ({mx['grade']}) - {mx['location']}" if mx else "[최대] 기록 없음")
-        lines.append(f"[최소] {mn['name']} {mn['cm']}cm ({mn['grade']}) - {mn['location']}" if mn else "[최소] 기록 없음")
-        if u["fish"]:
-            lines.append("📜 잡은 물고기 기록")
-            seen=set()
-            for f in u["fish"]:
-                if f["name"] not in seen:
-                    seen.add(f["name"])
-                    lines.append(f"- {f['name']} {f['cm']}cm | {f['location']} | {f['caught_at']}")
-        else: lines.append("기록 없음")
-        text="\n".join(lines)
-    elif utt.startswith("/장소"):
-        parts=utt.split()
-        if len(parts)>=2 and parts[1] in ("바다","민물"):
-            u["location"]=parts[1]; text=f"장소 {u['location']} 설정 완료"
-        else: text="형식: /장소 [바다|민물]"
+                u["attendance_last"]=today
+                title=get_title(u["level"])
+                reward=title_attendance_reward(title)
+                if title=="낚린이":
+                    before=u["restricted_gold"]; after=min(RESTRICTED_CAP,before+reward); gained=after-before
+                    u["restricted_gold"]=after
+                    text="제한골드 상한" if gained==0 else f"출석보상 {gained} 지급"
+                else:
+                    u["restricted_gold"]+=reward
+                    text=f"출석보상 {reward} 지급"
+        elif utt=="/전부판매":
+            text=sell_all_fish(u)
+        elif utt=="/판매확인":
+            text=confirm_resell(u,True)
+        elif utt=="/판매취소":
+            text=confirm_resell(u,False)
+        elif utt.startswith("/아이템판매"):
+            parts=utt.split()
+            if len(parts)<3:
+                text="형식: /아이템판매 [이름] [수량]"
+            else:
+                name=" ".join(parts[1:-1]); qty=int(parts[-1]); text=start_resell(u,name,qty)
+        elif utt.startswith("/구매 "):
+            parts=utt.split()
+            if len(parts)<3:
+                text="형식: /구매 [이름] [수량]"
+            else:
+                name=" ".join(parts[1:-1]); qty=int(parts[-1]); ok,msg=try_buy(u,name,qty); text=msg
+        elif utt=="/기록":
+            rec=u["records"]; mn=rec.get("min"); mx=rec.get("max"); lines=[]
+            lines.append(f"[최대] {mx['name']} {mx['cm']}cm ({mx['grade']}) - {mx['location']}" if mx else "[최대] 기록 없음")
+            lines.append(f"[최소] {mn['name']} {mn['cm']}cm ({mn['grade']}) - {mn['location']}" if mn else "[최소] 기록 없음")
+            if u["fish"]:
+                lines.append("📜 잡은 물고기 기록")
+                seen=set()
+                for f in u["fish"]:
+                    if f["name"] not in seen:
+                        seen.add(f["name"])
+                        lines.append(f"- {f['name']} {f['cm']}cm | {f['location']} | {f['caught_at']}")
+            else:
+                lines.append("기록 없음")
+            text="\n".join(lines)
+        elif utt.startswith("/장소"):
+            parts=utt.split()
+            if len(parts)>=2 and parts[1] in ("바다","민물"):
+                u["location"]=parts[1]; text=f"장소 {u['location']} 설정 완료"
+            else:
+                text="형식: /장소 [바다|민물]"
+        elif utt=="/상태":
+            text = handle_status(u)
+        elif utt=="/가방":
+            text = handle_bag(u)
 
-    save_store(store); return kakao_text(text or ""),200
+    save_store(store)
+    return kakao_text(text or ""),200
 
 if __name__=="__main__":
-    port=int(os.environ.get("PORT",5000)); app.run(host="0.0.0.0",port=port)
+    port=int(os.environ.get("PORT",5000))
     app.run(host="0.0.0.0", port=port)
