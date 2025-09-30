@@ -1,5 +1,7 @@
-# app.py (fixed)
-import os, time, threading
+# app.py (fully fixed, owner allowlist)
+import os
+import time
+import threading
 from flask import Flask, request
 from game import FishingGame, KakaoResp
 
@@ -8,13 +10,13 @@ app = Flask(__name__)
 DB_PATH = os.environ.get("FISHING_DB", "fishing.json")
 _lock = threading.Lock()
 
-# 유저별 캐스팅 상태 (실제 시간 체크 + 조기 릴 패널티)
+# 유저별 캐스팅 상태
 # { user_id: {"casting": bool, "start_ts": int, "ends_at": int, "sec": int, "spot": "바다"/"민물"} }
 user_state = {}
 
 game = FishingGame(DB_PATH)
 
-def now():
+def now() -> int:
     return int(time.time())
 
 def load_json():
@@ -38,16 +40,18 @@ def skill():
 
     try:
         # ── 채널 기능 접근 제어 ─────────────────────────────
-       if msg in ("/입어가능", "/입어해제"):
-    owners = ["pdh4908", "박동희"]  # 채널 주인 닉네임 목록
-    caller = user_name
-    if caller not in owners:
-        return KakaoResp.text("⚠️ 접근 권한이 없습니다.\n'/입어가능'과 '/입어해제'는 채널 주인(@pdh4908, @박동희)만 사용할 수 있습니다.")
+        if msg in ("/입어가능", "/입어해제"):
+            # 채널 주인으로 인정할 닉네임 목록
+            owners = ["pdh4908", "박동희"]
+            caller = user_name
+            if caller not in owners:
+                return KakaoResp.text("⚠️ 접근 권한이 없습니다.\n'/입어가능'과 '/입어해제'는 채널 주인(@pdh4908, @박동희)만 사용할 수 있습니다.")
             if msg == "/입어가능":
                 return KakaoResp.text(game.cmd_enable_access(user_id))
             else:
                 return KakaoResp.text(game.cmd_disable_access(user_id))
 
+        # 접근 활성화 여부 확인
         meta = game.store.get_meta()
         if not meta.get("access_enabled") and msg not in ("/입어가능", "/입어해제"):
             return KakaoResp.text("채널 주인이 /입어가능 을 입력해야 합니다. (활성화 전에는 어떤 기능도 사용할 수 없습니다)")
@@ -91,7 +95,10 @@ def skill():
         if msg == "/출석":
             return KakaoResp.text(game.cmd_attendance(user_id))
         if msg == "/초보자찬스":
-            return KakaoResp.text(game.cmd_newbie_chance(user_id))
+            if hasattr(game, "cmd_newbie_chance"):
+                return KakaoResp.text(game.cmd_newbie_chance(user_id))
+            else:
+                return KakaoResp.text("현재 버전에서는 /초보자찬스 기능이 비활성화되어 있습니다. (게임 모듈에 구현 필요)")
 
         # ── 소모품 사용 ───────────────────────────────────
         if msg in ("/집어제사용", "/집어제_사용", "/use_chum"):
@@ -105,7 +112,7 @@ def skill():
 
         # ── 낚시/릴감기 ───────────────────────────────────
         if msg.startswith("/낚시"):
-            return handle_cast_seconds(user_id, msg)
+            return KakaoResp.text(handle_cast_seconds(user_id, msg))
         if msg == "/릴감기":
             return KakaoResp.text(handle_reel(user_id))
 
@@ -133,7 +140,7 @@ def handle_cast_seconds(user_id: str, msg: str) -> str:
     used, max_slot = game.count_used_slots(game.store.load_user(user_id))
     if used >= max_slot:
         bag_text = game.cmd_inventory(user_id)
-        return f"⚠️ 가방이 가득 차 낚시를 진행할 수 없습니다. ({used}/{max_slot}칸)\n\n" + bag_text
+        return f"⚠️ 가방이 가득 차 낚시를 진행할 수 없습니다. ({used}/{max_slot}칸)\n\n{bag_text}"
 
     # 캐스팅 중복 방지 + 소모품 차감
     with _lock:
