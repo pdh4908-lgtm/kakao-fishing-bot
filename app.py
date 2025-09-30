@@ -38,11 +38,11 @@ def skill():
 
     try:
         # ── 채널 기능 접근 제어 ─────────────────────────────
-        if msg in ("/입어가능", "/입어해제"):
-            owner_name = "낚시 RPG"
-            caller = user_name
-            if caller != owner_name:
-                return KakaoResp.text("⚠️ 접근 권한이 없습니다.\n'/입어가능'과 '/입어해제'는 채널 주인(@낚시 RPG)만 사용할 수 있습니다.")
+       if msg in ("/입어가능", "/입어해제"):
+    owners = ["pdh4908", "박동희"]  # 채널 주인 닉네임 목록
+    caller = user_name
+    if caller not in owners:
+        return KakaoResp.text("⚠️ 접근 권한이 없습니다.\n'/입어가능'과 '/입어해제'는 채널 주인(@pdh4908, @박동희)만 사용할 수 있습니다.")
             if msg == "/입어가능":
                 return KakaoResp.text(game.cmd_enable_access(user_id))
             else:
