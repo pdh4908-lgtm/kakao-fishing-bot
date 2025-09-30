@@ -1,38 +1,60 @@
 # app.py
 import os
 import json
-import threading
-from datetime import datetime, date
+from datetime import datetime, time, date
 from flask import Flask, request, jsonify
 
-###############################################################################
-# 기본 설정
-###############################################################################
 app = Flask(__name__)
 DATA_PATH = os.environ.get("DATA_PATH", "data.json")
-LOCK = threading.Lock()
 
-# 상점 아이템 정의
-#   - restricted_allowed: 출석/초보자찬스 골드(제한 골드)로 구매 가능한지 여부
-SHOP_ITEMS = {
-    1: {"name": "지렁이", "price": 100, "restricted_allowed": True},
-    2: {"name": "떡밥", "price": 200, "restricted_allowed": True},
-    3: {"name": "집어제", "price": 800, "restricted_allowed": False},
-    4: {"name": "케미라이트", "price": 300, "restricted_allowed": False},
+# -----------------------------
+# 상수/정책
+# -----------------------------
+RESTRICTED_CAP = 1000  # 제한골드 최대 보유치(일반 규칙)
+
+# -----------------------------
+# 상점/아이템 정의
+# -----------------------------
+PRICES = {
+    "지렁이": 10,                  # 제한골드 사용 가능
+    "떡밥": 10,                    # 제한골드 사용 가능
+    "집어제": 500,                 # 3회 지속
+    "케미라이트1등급": 600,        # 1회성(20:00~05:00)
+    "케미라이트2등급": 350,        # 1회성(20:00~05:00)
+    "케미라이트3등급": 200,        # 1회성(20:00~05:00)
+    # 장비(예시)
+    "철제 낚싯대": 1000,
+    "강화 낚싯대": 5000,
+    "프로 낚싯대": 20000,
+    "레전드 낚싯대": 100000,
+}
+CONSUMABLES = {"지렁이", "떡밥", "집어제", "케미라이트1등급", "케미라이트2등급", "케미라이트3등급"}
+RESTRICTED_ALLOWED = {"지렁이", "떡밥"}
+
+# 허용 명령(이외엔 무응답)
+STRICT_CMDS = {
+    "/", "/상점", "/전부판매", "/출석", "/초보자찬스",
+    "/릴감기", "/판매확인", "/판매취소", "/기록"
+}
+PREFIX_CMDS = {
+    "/닉네임 ", "/구매 ", "/아이템판매 ", "/낚시 ", "/장소 ",
+    "/케미라이트1등급 사용", "/케미라이트2등급 사용", "/케미라이트3등급 사용",
+    "/집어제사용",
 }
 
-QUICK = [
-    {"action": "message", "label": "도움말", "messageText": "/도움말"},
-    {"action": "message", "label": "가방", "messageText": "/가방"},
-    {"action": "message", "label": "상점", "messageText": "/상점"},
-]
+def is_allowed_command(text: str) -> bool:
+    if not text or not text.startswith("/"):
+        return False
+    if text in STRICT_CMDS:
+        return True
+    for p in PREFIX_CMDS:
+        if text == p or text.startswith(p):
+            return True
+    return False
 
-###############################################################################
-# 저장/로드 (간단 파일 저장; Render에서는 일시적 저장소)
-###############################################################################
-def _now_datestr() -> str:
-    return date.today().isoformat()
-
+# -----------------------------
+# 저장/로드
+# -----------------------------
 def load_store():
     if not os.path.exists(DATA_PATH):
         return {"users": {}}
@@ -44,366 +66,678 @@ def load_store():
 
 def save_store(store):
     tmp = DATA_PATH + ".tmp"
-    with LOCK:
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(store, f, ensure_ascii=False, indent=2)
-        os.replace(tmp, DATA_PATH)
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(store, f, ensure_ascii=False, indent=2)
+    os.replace(tmp, DATA_PATH)
 
-###############################################################################
-# 유저 상태
-###############################################################################
-def get_user(store, user_id: str):
-    u = store["users"].get(user_id)
+def today_str():
+    return date.today().isoformat()
+
+# -----------------------------
+# 칭호/레벨
+# -----------------------------
+def get_title(level: int) -> str:
+    # 확정: 낚린이(1~30), 낚시인(31~70), 전문낚시인(71~99), 프로(100+)
+    if level <= 0:
+        level = 1
+    if level < 31:
+        return "낚린이"
+    elif level < 71:
+        return "낚시인"
+    elif level < 100:
+        return "전문낚시인"
+    else:
+        return "프로"
+
+def title_attendance_reward(title: str) -> int:
+    # 출석 제한골드 보상(칭호별)
+    return {
+        "낚린이": 150,
+        "낚시인": 300,
+        "전문낚시인": 1000,
+        "프로": 3000,
+    }.get(title, 0)
+
+def level_threshold(lv:int) -> int:
+    # 다음 레벨까지 필요 EXP = 100 + 50*(lv-1)
+    return 100 + 50 * (lv - 1)
+
+# -----------------------------
+# 신규 유저 기본값
+# -----------------------------
+def get_user(store, uid):
+    u = store["users"].get(uid)
     if u is None:
         u = {
-            "nickname": None,
-            "nickname_locked": False,  # True면 더 이상 변경 불가
-            "gold": 0,                 # 일반 골드
-            "restricted_gold": 0,      # 제한 골드(출석/초보자찬스) - 지렁이/떡밥만 구매 가능
-            "inventory": {},           # {"지렁이": 10, ...}
-            "is_beginner": True,       # 낚린이(초보) 여부
-            "attendance_last": None,   # 마지막 출석 날짜(YYYY-MM-DD)
-            "newbie_bonus": {          # 초보자찬스 사용 기록
-                "date": None,
-                "count": 0             # 하루 최대 3회
-            },
-            "stats": {
-                "level": 1,
-                "played_days": 0
-            }
+            "nickname": None,          # 닉네임 미설정
+            "nick_locked": False,      # 닉네임 확정 여부
+            "gold": 0,                 # 기본 소지금 0
+            "restricted_gold": 0,      # 기본 제한골드 0
+            "level": 1,
+            "exp": 0,
+            "rod": "철제 낚싯대",
+            "inventory": {},           # 소모품/수량
+            "fish": [],                # 가방 물고기
+            "attendance_last": None,   # 마지막 출석 일자
+            "newbie": {"date": None, "count": 0},  # 초보자찬스
+            "additive_uses": 0,        # 집어제 효과 남은 횟수
+            "pending_sale": None,      # 되팔기 대기 {name, qty, refund}
+            "location": None,          # "바다"/"민물"
+            "records": {"min": None, "max": None}, # 평생 기록
         }
-        store["users"][user_id] = u
+        store["users"][uid] = u
+    # 마이그레이션 안전장치
+    u.setdefault("location", None)
+    u.setdefault("records", {"min": None, "max": None})
     return u
 
-###############################################################################
-# 공통: 카카오 응답
-###############################################################################
-def kakao_text(text: str, quick=None):
-    payload = {
+# -----------------------------
+# 포맷/시간
+# -----------------------------
+def kakao_text(text):
+    return jsonify({
         "version": "2.0",
-        "template": {
-            "outputs": [{"simpleText": {"text": text}}],
-        },
-    }
-    if quick:
-        payload["template"]["quickReplies"] = quick
-    return jsonify(payload)
+        "template": {"outputs": [{"simpleText": {"text": text}}]}
+    })
 
-###############################################################################
-# 유틸
-###############################################################################
-def inv_add(user, item_name: str, cnt: int):
-    inv = user["inventory"]
-    inv[item_name] = inv.get(item_name, 0) + cnt
-    if inv[item_name] <= 0:
-        del inv[item_name]
+def fmt_money(g, r):
+    return f"Gold: 💰{g:,} | 제한골드: 💰{r:,}"
 
-def find_item_by_no_or_name(token: str):
-    # 번호가 들어오면 번호 우선
-    if token.isdigit():
-        no = int(token)
-        if no in SHOP_ITEMS:
-            return SHOP_ITEMS[no]
-        return None
-    # 이름으로 검색(정확히 일치 우선, 없으면 부분일치)
-    for no, it in SHOP_ITEMS.items():
-        if it["name"] == token:
-            return it
-    for no, it in SHOP_ITEMS.items():
-        if token in it["name"]:
-            return it
-    return None
+def is_night(now=None) -> bool:
+    now = now or datetime.now()
+    t = now.time()
+    return (t >= time(20,0)) or (t < time(5,0))
 
-def can_buy_with_restricted(item) -> bool:
-    return bool(item.get("restricted_allowed"))
+# -----------------------------
+# 가방 5칸 규칙
+# -----------------------------
+def slot_usage(u):
+    used = 0
+    slots = []
+    for f in u["fish"]:        # 물고기: 개체당 1칸
+        if used < 5:
+            slots.append({"type":"fish","data":f})
+            used += 1
+    for name, cnt in u["inventory"].items():  # 소모품: 종류당 1칸
+        if cnt > 0 and name in CONSUMABLES and used < 5:
+            slots.append({"type":"consumable","name":name,"count":cnt})
+            used += 1
+    while used < 5:
+        slots.append({"type":"empty"})
+        used += 1
+    return slots
 
-###############################################################################
-# 명령어 처리
-###############################################################################
-HELP_TEXT = (
-    "[명령어 안내]\n"
-    "1줄: /상태, /가방\n"
-    "2줄: /상점, 구매 [번호], 판매 [번호], 전부판매\n"
-    "3줄: /출석\n"
-    "초보 전용: /초보자찬스 (하루 3회, 1000골드) — 지급 골드는 지렁이/떡밥만 구매 가능\n"
-    "닉네임: /닉네임 설정 [원하는닉네임] (1회만 가능)\n"
-    "소비: /케미라이트 사용, /집어제 사용"
-)
+def bag_full(u) -> bool:
+    return all(s["type"] != "empty" for s in slot_usage(u))
 
-def fmt_money(user):
-    return f"일반골드: {user['gold']:,} / 제한골드: {user['restricted_gold']:,}"
+def will_overflow_if_add_consumable(u, name):
+    cnt = u["inventory"].get(name, 0)
+    if cnt > 0:
+        return False
+    return all(s["type"] != "empty" for s in slot_usage(u))
 
-def cmd_help():
-    return HELP_TEXT
+# -----------------------------
+# 소모품 추가/감소 (지렁이/떡밥 100개 한도)
+# -----------------------------
+def add_consumable(u, name, qty):
+    before = u["inventory"].get(name, 0)
+    after = before + qty
+    limit = 100 if name in {"지렁이", "떡밥"} else None
 
-def cmd_status(user):
-    lv = user["stats"]["level"]
-    nick = user["nickname"] or "(미설정)"
-    beginner = "예" if user["is_beginner"] else "아니오"
-    return (
-        f"[상태]\n닉네임: {nick}\n레벨: {lv}\n낚린이: {beginner}\n"
-        f"{fmt_money(user)}"
-    )
-
-def cmd_bag(user):
-    if not user["inventory"]:
-        return "[가방]\n비어 있습니다."
-    lines = ["[가방]"]
-    for name, cnt in sorted(user["inventory"].items()):
-        # 소비아이템 안내 추가
-        extra = ""
-        if name == "케미라이트":
-            extra = " (사용: /케미라이트 사용)"
-        if name == "집어제":
-            extra = " (사용: /집어제 사용)"
-        lines.append(f"- {name} x{cnt}{extra}")
-    return "\n".join(lines)
-
-def cmd_shop():
-    lines = ["[상점] (번호 / 이름 / 가격)"]
-    for no in sorted(SHOP_ITEMS.keys()):
-        it = SHOP_ITEMS[no]
-        tag = "제한골드 가능" if it["restricted_allowed"] else "일반골드만"
-        lines.append(f"{no}) {it['name']} / {it['price']}G / {tag}")
-    lines.append("구매 예시: '구매 1' 또는 '구매 지렁이 3'")
-    return "\n".join(lines)
-
-def cmd_buy(user, tokens):
-    # 형식: 구매 [번호] (개수1)  또는  구매 [이름] [개수]
-    if len(tokens) == 2:
-        target = find_item_by_no_or_name(tokens[1])
-        qty = 1
-    elif len(tokens) == 3:
-        target = find_item_by_no_or_name(tokens[1])
-        if tokens[2].isdigit():
-            qty = int(tokens[2])
+    note = None
+    if limit is not None:
+        if after > limit:
+            u["inventory"][name] = limit
+            gained = max(0, limit - before)
+            if gained < qty:
+                note = f"{name} 최대 보유 한도는 {limit}개입니다. {gained}개만 추가되었습니다."
         else:
-            return "구매 형식: '구매 [번호]' 또는 '구매 [아이템이름] [개수]'"
+            u["inventory"][name] = after
     else:
-        return "구매 형식: '구매 [번호]' 또는 '구매 [아이템이름] [개수]'"
+        u["inventory"][name] = after
 
-    if not target:
-        return "해당 아이템을 찾을 수 없습니다."
+    if u["inventory"][name] <= 0:
+        del u["inventory"][name]
 
-    price = target["price"] * qty
-    # 우선 제한골드로 결제 가능하면 제한골드부터 사용
-    used_restricted = 0
-    used_normal = 0
-    if can_buy_with_restricted(target):
-        use = min(user["restricted_gold"], price)
-        used_restricted = use
-        price -= use
-    # 남는 금액은 일반골드로
-    if price > 0:
-        if user["gold"] < price:
+    return note  # 한도 걸릴 때 안내 문구(없으면 None)
+
+# -----------------------------
+# 홈 화면('/')
+# -----------------------------
+def home_text(u):
+    lines = []
+    lines += [
+        "🎣 낚시 RPG 사용법",
+        "1) /장소 [바다|민물] ← 먼저 장소를 설정하세요",
+        "2) /낚시 [1~60]s ← 해당 초 만큼 캐스팅 (예: /낚시 15s)",
+        "3) 시간이 끝나면 /릴감기 로 결과 확인",
+        "",
+        "🏪 상점 이용 방법",
+        "/상점 → 상점 목록 보기",
+        "/구매 [이름] [갯수] → 예: /구매 지렁이 10개, /구매 케미라이트1등급 1개",
+        "/아이템판매 [이름] [수량] → 되팔기(구매가의 50%)",
+        "",
+        "(출석/보너스)",
+        "/출석 → 출석 보상 받기",
+        "/초보자찬스 → 낚린이 전용 보너스(1일 3회, 잔액 0일 때만 수령)",
+        "",
+    ]
+    title = get_title(u["level"])
+    lines.append(f"닉네임: [{title}] {u['nickname'] or '(미설정)'}")
+    lines += [
+        "[상태]",
+        f"Lv.{u['level']}  Exp: {u['exp']}/{level_threshold(u['level'])}",
+        f"{fmt_money(u['gold'], u['restricted_gold'])}",
+        f"착용 낚싯대: {u['rod']}",
+    ]
+    if u["additive_uses"] > 0:
+        lines.append(f"집어제 효과 남은 횟수: {u['additive_uses']}회")
+    lines.append("")
+    slots = slot_usage(u)
+    used = sum(1 for s in slots if s["type"] != "empty")
+    lines.append(f"[가방] {used}/5칸 사용")
+    for i, s in enumerate(slots, start=1):
+        if s["type"] == "empty":
+            lines.append(f"{i}. 비어있음")
+        elif s["type"] == "fish":
+            f = s["data"]
+            lines.append(f"{i}. {f['name']} {f['cm']}cm ({f['grade']}) - 판매가 {f['price']}골드")
+        else:
+            name = s["name"]; cnt = s["count"]
+            suffix = ""
+            if name == "집어제":
+                suffix = " · 사용: /집어제사용 (3회 지속)"
+            elif name.startswith("케미라이트"):
+                suffix = " · 사용: /" + name + " 사용 (1회성 · 20:00~05:00)"
+            lines.append(f"{i}. {name} ({cnt}개) - 소모품{suffix}")
+    owned = set(k for k,v in u["inventory"].items() if v>0)
+    missing = [x for x in ["지렁이","떡밥","집어제","케미라이트1등급","케미라이트2등급","케미라이트3등급"] if x not in owned]
+    if missing:
+        lines.append("")
+        lines.append("보유하지 않은 물품: " + ", ".join(missing))
+    return "\n".join(lines)
+
+# -----------------------------
+# 상점 UI
+# -----------------------------
+def shop_text(u):
+    lines = []
+    lines.append("🏪 상점\n")
+    lines += [
+        "[소모품]",
+        f"- 지렁이 (1개) | 💰{PRICES['지렁이']:,}  ← 제한골드 사용 가능 (보유 한도 100개)",
+        f"- 떡밥   (1개) | 💰{PRICES['떡밥']:,}  ← 제한골드 사용 가능 (보유 한도 100개)",
+        f"- 집어제 (1개) | 💰{PRICES['집어제']:,}  ※ 사용 시 3회 지속",
+        f"- 케미라이트3등급 (1개) | 💰{PRICES['케미라이트3등급']:,}  ※ 사용 1회성, 20:00~05:00",
+        f"- 케미라이트2등급 (1개) | 💰{PRICES['케미라이트2등급']:,}  ※ 사용 1회성, 20:00~05:00",
+        f"- 케미라이트1등급 (1개) | 💰{PRICES['케미라이트1등급']:,}  ※ 사용 1회성, 20:00~05:00",
+        "",
+        "[장비]",
+        f"- 철제 낚싯대 | 💰{PRICES['철제 낚싯대']:,}",
+        f"- 강화 낚싯대 | 💰{PRICES['강화 낚싯대']:,}",
+        f"- 프로 낚싯대 | 💰{PRICES['프로 낚싯대']:,}",
+        f"- 레전드 낚싯대 | 💰{PRICES['레전드 낚싯대']:,}",
+        "",
+        "구매: /구매 [이름] [갯수]",
+        "예) /구매 지렁이 10개, /구매 케미라이트1등급 1개",
+        "되팔기: /아이템판매 [이름] [수량]  (구매가의 50%)",
+        "정책",
+        "- 제한골드는 지렁이/떡밥에만 사용 (우선 차감)",
+        "- 케미라이트: 밤(20:00~05:00)만 사용 가능",
+        "- 집어제: 사용 시 3회 지속 효과",
+    ]
+    return "\n".join(lines)
+
+# -----------------------------
+# 가격/경험치
+# -----------------------------
+def fish_price(grade):
+    return {"소형": 20, "중형": 40, "대형": 80}.get(grade, 20)
+
+def fish_exp(cm, grade):
+    if grade == "대형": return cm * 100
+    if grade == "중형": return cm * 10
+    return cm
+
+def add_exp(u, amount):
+    u["exp"] += amount    # 누적 EXP (게이지가 넘쳐도 계속 누적)
+    while u["exp"] >= level_threshold(u["level"]):
+        u["exp"] -= level_threshold(u["level"])
+        u["level"] += 1
+
+# -----------------------------
+# 가방 텍스트
+# -----------------------------
+def bag_text_lines(u):
+    slots = slot_usage(u)
+    used = sum(1 for s in slots if s["type"] != "empty")
+    lines = [f"[가방] {used}/5칸 사용"]
+    for i, s in enumerate(slots, start=1):
+        if s["type"] == "empty":
+            lines.append(f"{i}. 비어있음")
+        elif s["type"] == "fish":
+            f = s["data"]
+            lines.append(f"{i}. {f['name']} {f['cm']}cm ({f['grade']}) - 판매가 {f['price']}골드")
+        else:
+            name = s["name"]; cnt = s["count"]
+            suffix = ""
+            if name == "집어제":
+                suffix = " · 사용: /집어제사용 (3회 지속)"
+            elif name.startswith("케미라이트"):
+                suffix = " · 사용: /" + name + " 사용 (1회성 · 20:00~05:00)"
+            lines.append(f"{i}. {name} ({cnt}개) - 소모품{suffix}")
+    return lines
+
+def bag_full_block_text(u):
+    lines = []
+    lines.append("⚠️ 가방이 가득 차 낚시를 진행할 수 없습니다. (5/5칸)")
+    night = is_night()
+    has_chum = u["inventory"].get("집어제", 0) > 0
+    has_chem_any = any(u["inventory"].get(k,0) > 0 for k in ["케미라이트1등급","케미라이트2등급","케미라이트3등급"])
+
+    offered = False
+    if has_chum or (has_chem_any and night):
+        lines.append("가방이 가득 찼습니다. 아래 소모품 중 하나를 사용하시겠어요?")
+        if has_chum:
+            lines.append("• /집어제사용")
+            offered = True
+        if has_chem_any and night:
+            for k in ["케미라이트1등급","케미라이트2등급","케미라이트3등급"]:
+                if u["inventory"].get(k,0)>0:
+                    lines.append(f"• /{k} 사용")
+                    offered = True
+            lines.append("※ 케미라이트 사용시간 제한: 20:00~05:00")
+    else:
+        if has_chem_any and not night:
+            t = datetime.now().strftime("%H:%M")
+            lines.append(f"※ 케미라이트는 낮 시간({t})에는 사용할 수 없습니다. 사용 가능 시간: 20:00~05:00")
+
+    if not offered:
+        total = sum(f["price"] for f in u["fish"])
+        lines.append("가방에 사용 가능한 소모품이 없습니다. 대신 가방 속 물고기를 전부 판매하시겠습니까?")
+        lines.append("👉 /전부판매 입력 시 즉시 판매 후 칸이 비워집니다.")
+        lines.append(f"예상 판매 금액: 💰{total:,}")
+        lines.append(f"판매 후 소지금: 💰{u['gold']+total:,} | 제한골드: 💰{u['restricted_gold']:,}")
+    lines.append("")
+    lines += bag_text_lines(u)
+    return "\n".join(lines)
+
+# -----------------------------
+# 기록(평생) 업데이트
+# -----------------------------
+def update_records(u, fish_obj):
+    rec = u["records"]
+    if rec["min"] is None or fish_obj["cm"] < rec["min"]["cm"]:
+        rec["min"] = {
+            "name": fish_obj["name"],
+            "cm": fish_obj["cm"],
+            "grade": fish_obj["grade"],
+            "location": fish_obj.get("location") or "알 수 없음",
+            "caught_at": fish_obj.get("caught_at")
+        }
+    if rec["max"] is None or fish_obj["cm"] > rec["max"]["cm"]:
+        rec["max"] = {
+            "name": fish_obj["name"],
+            "cm": fish_obj["cm"],
+            "grade": fish_obj["grade"],
+            "location": fish_obj.get("location") or "알 수 없음",
+            "caught_at": fish_obj.get("caught_at")
+        }
+
+# -----------------------------
+# 낚시 흐름(간단)
+# -----------------------------
+def handle_cast(u, seconds:int):
+    if bag_full(u):
+        return bag_full_block_text(u)
+    u["casting"] = {"seconds": seconds, "start": datetime.now().isoformat()}
+    return "캐스팅 시작! 시간이 끝나면 /릴감기 로 결과를 확인하세요."
+
+def handle_reel(u):
+    if u.get("additive_uses", 0) > 0:
+        u["additive_uses"] -= 1
+    if bag_full(u):
+        return bag_full_block_text(u)
+
+    import random
+    cm = random.randint(20, 35)
+    grade = "소형" if cm < 26 else ("중형" if cm < 31 else "대형")
+    price = fish_price(grade)
+    gain = fish_exp(cm, grade)
+
+    loc = u.get("location") or "알 수 없음"
+    fish_obj = {
+        "name": "붕어",
+        "cm": cm,
+        "grade": grade,
+        "price": price,
+        "location": loc,
+        "caught_at": today_str()  # 잡은 날짜 기록
+    }
+    u["fish"].append(fish_obj)
+    update_records(u, fish_obj)
+    add_exp(u, gain)
+
+    msg = []
+    msg.append(f"🎣 낚시 성공! {fish_obj['name']} {cm}cm ({grade})을(를) 낚았습니다!")
+    msg.append(f"가격: 💰{price:,} | 경험치 +{gain} | 장소: {loc}")
+    msg.append("")
+    msg += bag_text_lines(u)
+    return "\n".join(msg)
+
+# -----------------------------
+# 판매/전부판매/되팔기
+# -----------------------------
+def sell_all_fish(u):
+    total = sum(f["price"] for f in u["fish"])
+    u["gold"] += total
+    u["fish"].clear()
+    return f"전부판매 완료: 💰{total:,} 획득\n{fmt_money(u['gold'], u['restricted_gold'])}"
+
+def start_resell(u, name, qty):
+    if name not in PRICES:
+        return "해당 아이템은 되팔 수 없습니다."
+    have = u["inventory"].get(name, 0)
+    if qty <= 0 or have < qty:
+        return "수량이 올바르지 않거나 보유 수량이 부족합니다."
+    refund = (PRICES[name] * qty) // 2
+    u["pending_sale"] = {"name":name, "qty":qty, "refund":refund}
+    return (
+        "⚠️ 되팔기 안내\n"
+        "상점에서 산 물건을 되팔면 구매가격의 50%만 환불됩니다.\n"
+        f"판매 대상: {name} ×{qty}\n"
+        f"환불 예정: 💰{refund:,}\n"
+        "진행하시겠습니까?\n"
+        "/판매확인 | /판매취소"
+    )
+
+def confirm_resell(u, ok:bool):
+    if not u.get("pending_sale"):
+        return "대기 중인 되팔기 내역이 없습니다."
+    if not ok:
+        u["pending_sale"] = None
+        return "판매가 취소되었습니다."
+    ps = u["pending_sale"]
+    add_consumable(u, ps["name"], -ps["qty"])
+    u["gold"] += ps["refund"]
+    u["pending_sale"] = None
+    return f"판매 완료: 💰{ps['refund']:,} 환불\n{fmt_money(u['gold'], u['restricted_gold'])}"
+
+# -----------------------------
+# 구매
+# -----------------------------
+def try_buy(u, name, qty):
+    if name not in PRICES:
+        return False, "존재하지 않는 상품입니다."
+    if qty <= 0:
+        return False, "구매 수량이 올바르지 않습니다."
+
+    # 가방 수용 체크(새 소모품 종류를 0→보유로 바꿀 때 1칸 필요)
+    if name in CONSUMABLES and will_overflow_if_add_consumable(u, name):
+        return False, "가방이 부족해요. (구매 후 5/5칸)"
+
+    unit = PRICES[name]
+    total = unit * qty
+
+    use_restricted = 0
+    use_gold = 0
+    if name in RESTRICTED_ALLOWED:
+        use_restricted = min(u["restricted_gold"], total)
+        remain = total - use_restricted
+        if remain > u["gold"]:
+            return False, f"⚠️ 골드가 부족합니다. 필요: 💰{total:,} / 보유: 💰{u['gold']:,} | 제한골드: 💰{u['restricted_gold']:,}"
+        use_gold = remain
+    else:
+        if total > u["gold"]:
+            return False, f"⚠️ 골드가 부족합니다. 필요: 💰{total:,} / 보유: 💰{u['gold']:,}"
+        use_gold = total
+
+    u["gold"] -= use_gold
+    u["restricted_gold"] -= use_restricted
+
+    limit_note = None
+    if name in CONSUMABLES:
+        limit_note = add_consumable(u, name, qty)
+        base = f"{name}({qty}개)를 구매했어요."
+        if limit_note:
+            base += f"\n{limit_note}"
+        return True, base + f"\n잔액  {fmt_money(u['gold'], u['restricted_gold'])}"
+    else:
+        u["rod"] = name
+        return True, f"{name}를(을) 구매했어요.\n잔액  {fmt_money(u['gold'], u['restricted_gold'])}"
+
+# -----------------------------
+# 명령 처리
+# -----------------------------
+def handle_cmd(u, utt:str):
+    t = (utt or "").strip()
+
+    # 닉네임 미설정
+    if not u["nick_locked"]:
+        if t.startswith("/닉네임 "):
+            nickname = t.replace("/닉네임 ","",1).strip()
+            if not nickname:
+                return "닉네임 설정 형식: /닉네임 원하는이름"
+            u["nickname"] = nickname
+            u["nick_locked"] = True
+            return f"닉네임이 '{nickname}'(으)로 설정되었습니다.\n이제 '/' 로 홈 화면을 확인해 보세요."
+        if t == "/":
             return (
-                "골드가 부족합니다.\n"
-                f"필요: {target['price'] * qty:,}G / {fmt_money(user)}"
+                "🎣 낚시 RPG에 오신 것을 환영합니다!\n\n"
+                "닉네임을 먼저 설정해 주세요.\n"
+                "닉네임은 한 번 설정하면 변경할 수 없습니다.\n\n"
+                "설정 방법: /닉네임 [원하는이름]\n"
+                "예) /닉네임 홍길동"
             )
-        used_normal = price
+        return ""
 
-    # 차감 및 지급
-    user["restricted_gold"] -= used_restricted
-    user["gold"] -= used_normal
-    inv_add(user, target["name"], qty)
+    # 홈
+    if t in ("/","홈","home","메뉴"):
+        return home_text(u)
 
-    paid = []
-    if used_restricted:
-        paid.append(f"제한골드 {used_restricted:,}G")
-    if used_normal:
-        paid.append(f"일반골드 {used_normal:,}G")
-    paid_str = " + ".join(paid) if paid else "0G"
+    # 장소 설정
+    if t.startswith("/장소"):
+        parts = t.split()
+        if len(parts) >= 2 and parts[1] in ("바다","민물"):
+            u["location"] = parts[1]
+            return f"장소를 '{u['location']}'(으)로 설정했습니다. 이제 /낚시 [1~60]s 로 캐스팅해 보세요."
+        return "형식: /장소 [바다|민물]"
 
-    return (
-        f"구매 완료: {target['name']} x{qty}\n"
-        f"결제: {paid_str}\n{fmt_money(user)}"
-    )
+    # 상점
+    if t == "/상점":
+        return shop_text(u)
 
-def cmd_sell(user, tokens):
-    # 형식: 판매 [번호]
-    if len(tokens) != 2 or not tokens[1].isdigit():
-        return "판매 형식: '판매 [번호]' (상점 번호 기준)"
-    no = int(tokens[1])
-    it = SHOP_ITEMS.get(no)
-    if not it:
-        return "해당 번호의 아이템이 없습니다."
-    name = it["name"]
-    if user["inventory"].get(name, 0) <= 0:
-        return f"가방에 {name}이(가) 없습니다."
+    # 출석 (칭호별 제한골드 지급)
+    if t == "/출석":
+        today = today_str()
+        if u["attendance_last"] == today:
+            return "오늘은 이미 출석 체크를 하였습니다."
+        u["attendance_last"] = today
+        title = get_title(u["level"])
+        reward = title_attendance_reward(title)
 
-    # 단순 환불가: 구매가의 50%
-    user["inventory"][name] -= 1
-    if user["inventory"][name] <= 0:
-        del user["inventory"][name]
-    refund = it["price"] // 2
-    user["gold"] += refund
-    return f"판매 완료: {name} x1 → {refund}G 획득\n{fmt_money(user)}"
+        # 낚린이는 제한골드 1000 초과 불가(캡 적용)
+        if title == "낚린이":
+            before = u["restricted_gold"]
+            after = min(RESTRICTED_CAP, before + reward)
+            gained = max(0, after - before)
+            u["restricted_gold"] = after
+            if gained == 0:
+                return f"낚린이는 제한골드 보유 상한이 {RESTRICTED_CAP}입니다. 잔액을 사용한 뒤 다시 출석해 주세요.\n{fmt_money(u['gold'], u['restricted_gold'])}"
+            return f"✅ 출석 보상 {gained}골드 지급! ({title})\n{fmt_money(u['gold'], u['restricted_gold'])}"
 
-def cmd_sell_all(user):
-    if not user["inventory"]:
-        return "판매할 아이템이 없습니다."
-    gained = 0
-    # 상점에 있는 아이템만 판매 대상으로 가정
-    sellables = {it["name"]: it for it in SHOP_ITEMS.values()}
-    to_del = []
-    for name, cnt in user["inventory"].items():
-        if name in sellables and cnt > 0:
-            refund = (sellables[name]["price"] // 2) * cnt
-            gained += refund
-            to_del.append(name)
-    for name in to_del:
-        del user["inventory"][name]
-    user["gold"] += gained
-    return f"전부판매 완료: {gained}G 획득\n{fmt_money(user)}"
+        # 낚린이 외 구간: 출석으로는 1000 초과 허용
+        u["restricted_gold"] = u["restricted_gold"] + reward
+        return f"✅ 출석 보상 {reward}골드 지급! ({title})\n{fmt_money(u['gold'], u['restricted_gold'])}"
 
-def cmd_attendance(user):
-    today = _now_datestr()
-    if user["attendance_last"] == today:
-        return "오늘은 이미 출석 체크를 하였습니다."
-    user["attendance_last"] = today
-    user["restricted_gold"] += 1000
-    return (
-        "출석 체크 완료: 제한골드 1,000G 지급\n"
-        "지급된 제한골드는 지렁이/떡밥 구매에만 사용할 수 있습니다.\n"
-        f"{fmt_money(user)}"
-    )
+    # 초보자찬스 (1일 3회, 제한골드 0일 때만 1000 수령)
+    if t == "/초보자찬스":
+        today = today_str()
+        nb = u["newbie"]
+        if nb.get("date") != today:
+            nb["date"] = today
+            nb["count"] = 0
+        if nb["count"] >= 3:
+            return "오늘은 이미 3회 모두 사용했습니다."
+        # 제한골드가 정확히 0일 때만 수령 가능
+        if u["restricted_gold"] != 0:
+            return (
+                "제한골드 잔액이 0이어야 초보자찬스를 받을 수 있습니다.\n"
+                f"현재 {fmt_money(u['gold'], u['restricted_gold'])}\n"
+                "지렁이/떡밥 구매 등으로 제한골드를 모두 사용한 뒤 다시 시도해 주세요."
+            )
+        # 수령 시 1000으로 세팅
+        u["restricted_gold"] = RESTRICTED_CAP
+        nb["count"] += 1
+        return f"초보자찬스 사용 {nb['count']}/3회: 제한골드 1,000 지급\n{fmt_money(u['gold'], u['restricted_gold'])}"
 
-def cmd_newbie_bonus(user):
-    if not user["is_beginner"]:
-        return "초보자 전용 보상은 더 이상 받을 수 없습니다."
-    today = _now_datestr()
-    nb = user["newbie_bonus"]
-    if nb["date"] != today:
-        nb["date"] = today
-        nb["count"] = 0
-    if nb["count"] >= 3:
-        return "오늘은 이미 3회 모두 사용했습니다."
+    # 전부판매
+    if t == "/전부판매":
+        return sell_all_fish(u)
 
-    nb["count"] += 1
-    user["restricted_gold"] += 1000
-    return (
-        f"초보자찬스 사용 {nb['count']}/3회: 제한골드 1,000G 지급\n"
-        "지급된 제한골드는 지렁이/떡밥 구매에만 사용할 수 있습니다.\n"
-        f"{fmt_money(user)}"
-    )
+    # 되팔기 확인/취소
+    if t == "/판매확인":
+        return confirm_resell(u, True)
+    if t == "/판매취소":
+        return confirm_resell(u, False)
 
-def cmd_nickname(user, tokens):
-    # /닉네임 설정 [닉네임]
-    if user["nickname_locked"]:
-        return "닉네임은 한 번만 설정할 수 있습니다."
-    if len(tokens) < 3 or tokens[1] != "설정":
-        return "닉네임 설정 형식: '/닉네임 설정 원하는닉네임'"
-    nickname = " ".join(tokens[2:]).strip()
-    if not nickname:
-        return "닉네임을 입력해 주세요."
-    user["nickname"] = nickname
-    user["nickname_locked"] = True
-    return f"닉네임이 '{nickname}'(으)로 설정되었습니다. 이후 변경은 불가합니다."
+    # 소모품 사용
+    if t == "/집어제사용":
+        if u["inventory"].get("집어제",0) <= 0:
+            return "집어제가 없습니다."
+        add_consumable(u, "집어제", -1)
+        u["additive_uses"] = 3
+        return "✅ 집어제 1개를 사용했습니다. (효과 3회 지속)"
 
-def cmd_use_item(user, item_name: str):
-    if user["inventory"].get(item_name, 0) <= 0:
-        return f"가방에 {item_name}이(가) 없습니다."
-    inv_add(user, item_name, -1)
-    return f"{item_name} 1개 사용 완료."
+    if t.endswith(" 사용") and t.startswith("/케미라이트"):
+        item = t[1:-3].strip()
+        if item not in {"케미라이트1등급","케미라이트2등급","케미라이트3등급"}:
+            return ""
+        if not is_night():
+            now = datetime.now().strftime("%H:%M")
+            return f"케미라이트는 낮 시간({now})에는 사용할 수 없습니다. 사용 가능 시간: 20:00~05:00"
+        if u["inventory"].get(item,0) <= 0:
+            return f"{item} 이(가) 없습니다."
+        add_consumable(u, item, -1)
+        return f"✅ {item} 1개를 사용했습니다. (1회성 · 20:00~05:00)"
 
-###############################################################################
-# 메인 핸들러
-###############################################################################
-def handle_command(utterance: str, user_id: str) -> str:
-    store = load_store()
-    user = get_user(store, user_id)
-    tokens = utterance.strip().split()
+    # 되팔기 시작 (/아이템판매 [이름] [수량])
+    if t.startswith("/아이템판매"):
+        rest = t.replace("/아이템판매","",1).strip()
+        if not rest:
+            return "형식: /아이템판매 [이름] [수량]"
+        parts = rest.split()
+        if len(parts) < 2:
+            return "형식: /아이템판매 [이름] [수량]"
+        name = " ".join(parts[:-1])
+        qty_txt = parts[-1]
+        qty = 0
+        for ch in qty_txt:
+            if ch.isdigit():
+                qty = qty*10 + int(ch)
+        if qty <= 0:
+            return "수량을 숫자로 입력해 주세요."
+        return start_resell(u, name, qty)
 
-    if not tokens:
-        return "등록된 명령어만 사용할 수 있습니다. '/도움말'을 입력해 주세요."
-
-    head = tokens[0]
-
-    # 표준 명령어
-    if head in ("/도움말", "도움말"):
-        return cmd_help()
-    if head in ("/상태", "상태"):
-        return cmd_status(user)
-    if head in ("/가방", "가방"):
-        return cmd_bag(user)
-    if head in ("/상점", "상점"):
-        return cmd_shop()
-
-    # 거래
-    if head == "구매":
-        msg = cmd_buy(user, tokens)
-        save_store(store)
-        return msg
-    if head == "판매":
-        msg = cmd_sell(user, tokens)
-        save_store(store)
-        return msg
-    if head in ("전부판매", "/전부판매"):
-        msg = cmd_sell_all(user)
-        save_store(store)
+    # 구매 (/구매 [이름] [갯수])
+    if t.startswith("/구매 "):
+        rest = t.replace("/구매","",1).strip()
+        parts = rest.split()
+        if len(parts) < 2:
+            return "형식: /구매 [이름] [갯수]\n예) /구매 지렁이 10개"
+        qty_txt = parts[-1]
+        qty = 0
+        for ch in qty_txt:
+            if ch.isdigit():
+                qty = qty*10 + int(ch)
+        if qty <= 0:
+            return "구매 수량을 숫자로 입력해 주세요. 예) /구매 지렁이 10개"
+        name = " ".join(parts[:-1])
+        ok, msg = try_buy(u, name, qty)
         return msg
 
-    # 보상/출석
-    if head in ("/출석", "출석"):
-        msg = cmd_attendance(user)
-        save_store(store)
-        return msg
-    if head in ("/초보자찬스", "초보자찬스"):
-        msg = cmd_newbie_bonus(user)
-        save_store(store)
-        return msg
+    # 낚시/릴감기
+    if t.startswith("/낚시"):
+        num = 0
+        for ch in t:
+            if ch.isdigit():
+                num = num*10 + int(ch)
+        if num <= 0 or num > 60:
+            return "낚시 시간은 1~60초 사이로 입력해 주세요. 예) /낚시 15s"
+        if bag_full(u):
+            return bag_full_block_text(u)
+        return handle_cast(u, num)
 
-    # 닉네임
-    if head in ("/닉네임", "닉네임"):
-        msg = cmd_nickname(user, tokens)
-        save_store(store)
-        return msg
+    if t == "/릴감기":
+        return handle_reel(u)
 
-    # 소비 아이템 사용
-    if utterance.strip() in ("/케미라이트 사용", "케미라이트 사용"):
-        msg = cmd_use_item(user, "케미라이트")
-        save_store(store)
-        return msg
-    if utterance.strip() in ("/집어제 사용", "집어제 사용"):
-        msg = cmd_use_item(user, "집어제")
-        save_store(store)
-        return msg
+    # 기록: 1) 최대크기 2) 최소크기 3) 종류별 1마리(장소+날짜)
+    if t == "/기록":
+        rec = u.get("records") or {}
+        mn = rec.get("min")
+        mx = rec.get("max")
+        lines = []
 
-    # 기타 → 안내
-    return "등록된 명령어만 사용할 수 있습니다. '/도움말'을 입력해 주세요."
+        # 첫째줄: 최대
+        if mx:
+            lines.append(f"[최대크기] {mx['name']} {mx['cm']}cm ({mx['grade']}) - {mx.get('location','알 수 없음')}")
+        else:
+            lines.append("[최대크기] 기록 없음")
 
-###############################################################################
+        # 둘째줄: 최소
+        if mn:
+            lines.append(f"[최소크기] {mn['name']} {mn['cm']}cm ({mn['grade']}) - {mn.get('location','알 수 없음')}")
+        else:
+            lines.append("[최소크기] 기록 없음")
+
+        # 셋째줄 이후: 종류별 1마리(장소+날짜)
+        if u["fish"]:
+            lines.append("")
+            lines.append("📜 잡은 물고기 기록 (종류별 1마리)")
+            seen = set()
+            for f in u["fish"]:
+                key = f["name"]
+                if key not in seen:
+                    seen.add(key)
+                    lines.append(f"- {f['name']} {f['cm']}cm ({f['grade']}) | 장소: {f.get('location','알 수 없음')} | 날짜: {f.get('caught_at','알 수 없음')}")
+        else:
+            lines.append("")
+            lines.append("📜 잡은 물고기 기록 없음")
+
+        return "\n".join(lines)
+
+    return ""
+
+# -----------------------------
 # 라우팅
-###############################################################################
+# -----------------------------
 @app.get("/")
 def health():
     return "OK", 200
 
-# /skill, /skill/ 모두 허용. GET(핑)도 200으로 응답.
-@app.route("/skill", methods=["GET", "POST"], strict_slashes=False)
-@app.route("/skill/", methods=["GET", "POST"], strict_slashes=False)
+@app.route("/skill", methods=["GET","POST"], strict_slashes=False)
+@app.route("/skill/", methods=["GET","POST"], strict_slashes=False)
 def skill():
     if request.method == "GET":
-        return kakao_text("PING OK"), 200
+        return kakao_text(""), 200
 
     body = request.get_json(silent=True) or {}
     user_req = body.get("userRequest", {})
-    utterance = (user_req.get("utterance") or "").strip()
-    user_id = user_req.get("user", {}).get("id") or "anonymous"
+    utter = (user_req.get("utterance") or "").strip()
+    uid = user_req.get("user", {}).get("id") or "anonymous"
 
-    text = handle_command(utterance, user_id)
-    return kakao_text(text, quick=QUICK), 200
+    if not is_allowed_command(utter):
+        return kakao_text(""), 200
 
-# 혹시 /skill1로 호출 중이면 임시로 매핑
-@app.route("/skill1", methods=["GET", "POST"], strict_slashes=False)
-def skill1_alias():
-    if request.method == "GET":
-        return kakao_text("PING OK (/skill1)"), 200
-    return skill()
+    store = load_store()
+    u = get_user(store, uid)
+    text = handle_cmd(u, utter)
+    save_store(store)
+    return kakao_text(text or ""), 200
 
-###############################################################################
+# -----------------------------
 # 로컬 실행
-###############################################################################
+# -----------------------------
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
