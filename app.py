@@ -248,7 +248,7 @@ def handle_fishing(user, seconds):
         user["fishing_until"] = 0  # 종료
 
     return kakao_text_response(
-        f"…뭔가 걸린 것 같다!!!\n\n" \               f"🎣 낚시 성공! {fish_name} {length}cm ({size}어종) | 남은 {bait_type}: {remain_bait}개\n" \               f"가격: 💰{gold} | 경험치 +{exp} | 장소: {user['place']}\n\n" \               f"{bag_text(user)}"
+        f"…뭔가 걸린 것 같다!!!\n\n"               f"🎣 낚시 성공! {fish_name} {length}cm ({size}어종) | 남은 {bait_type}: {remain_bait}개\n" \               f"가격: 💰{gold} | 경험치 +{exp} | 장소: {user['place']}\n\n" \               f"{bag_text(user)}"
     )
     else:
         user["fishing_until"] = 0  # 종료
