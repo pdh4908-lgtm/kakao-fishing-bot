@@ -92,48 +92,35 @@ FISH_POOL = {
 }
 
 SHOP_PRICE = {
-# INVALID STRING REMOVED: "지렁이": 10, "떡밥": 10, "집어제": 2000,
-# INVALID STRING REMOVED: "케미라이트3등급": 200, "케미라이트2등급": 350, "케미라이트1등급": 1000,
-# INVALID STRING REMOVED: "철제 낚싯대": 5000, "강화 낚싯대": 20000, "프로 낚싯대": 100000, "레전드 낚싯대": 500000,
 }
 
 # ---------------- 핵심 헬퍼 함수 ----------------
 
 def get_user(user_id):
-# INVALID STRING REMOVED: """사용자 ID로 유저 데이터를 가져오거나 새로 생성합니다."""
     if user_id not in users:
         users[user_id] = {
-# INVALID STRING REMOVED: "nickname": None, "gold": 0, "limit_gold": 0,
-# INVALID STRING REMOVED: "exp": 0, "level": 1, "bag": [], "max_slot": 5,
-# INVALID STRING REMOVED: "inventory": {"지렁이": 0, "떡밥": 0},
-# INVALID STRING REMOVED: "items": {"집어제": 0, "케미라이트1등급": 0, "케미라이트2등급": 0, "케미라이트3등급": 0},
-# INVALID STRING REMOVED: "record": [], "place": None, "last_checkin": None
         }
     return users[user_id]
 
 def get_title(level):
-# INVALID STRING REMOVED: """레벨에 맞는 칭호를 반환합니다."""
     if level <= 40: return "🐟 낚린이"
     elif level <= 69: return "🎣 낚시인"
     elif level <= 99: return "🐠 프로낚시꾼"
     else: return "🐳 강태공"
 
 def get_exp_and_gold(size):
-# INVALID STRING REMOVED: """물고기 크기에 따른 기본 경험치와 골드를 반환합니다."""
     if size == "소형": return 5, 80
     elif size == "중형": return 15, 300
     elif size == "대형": return 50, 1000
     return 0, 0
 
 def parse_amount(txt):
-# INVALID STRING REMOVED: """'10개', '5' 등 텍스트에서 숫자만 추출합니다."""
     num_str = "".join(filter(str.isdigit, txt))
     return int(num_str) if num_str else 0
 
 # ---------------- UI 텍스트 생성 함수 ----------------
 
 def bag_text(user):
-# INVALID STRING REMOVED: """가방 상태를 텍스트로 만듭니다."""
     lines = [f"[가방] {len(user['bag'])}/{user['max_slot']}칸 사용"]
     for i in range(user['max_slot']):
         if i < len(user['bag']):
@@ -144,13 +131,9 @@ def bag_text(user):
     return "\n".join(lines)
 
 def home_text(user):
-# INVALID STRING REMOVED: """초기 화면(도움말) 텍스트를 생성합니다."""
     if user["nickname"] is None:
         return (
             "🎉 낚시 RPG에 오신 것을 환영합니다!\n\n"
-# INVALID STRING REMOVED: "🎣 게임을 시작하려면 먼저 닉네임을 설정해주세요.\n"
-# INVALID STRING REMOVED: "예시) /닉네임 홍길동\n\n"
-# INVALID STRING REMOVED: "닉네임은 한 번만 설정 가능하며 이후 변경할 수 없습니다."
         )
     owned_items = []
     for item, count in user['inventory'].items():
@@ -162,26 +145,8 @@ def home_text(user):
 
     return (
         "🎣 낚시 RPG 사용법\n"
-# INVALID STRING REMOVED: "1) /장소 [바다|민물] ← 먼저 장소를 설정하세요\n"
-# INVALID STRING REMOVED: "2) /낚시 [1~60]초 ← 해당 초 만큼 캐스팅\n"
-# INVALID STRING REMOVED: "3) /기록 → 물고기 기록 보기!\n\n"
-# INVALID STRING REMOVED: "🏪 상점 이용 방법\n"
-# INVALID STRING REMOVED: "/상점 → 상점 목록 보기\n"
-# INVALID STRING REMOVED: "/구매 [이름] [갯수] → 예: /구매 지렁이 10\n"
-# INVALID STRING REMOVED: "/판매 [이름] [수량] → 되팔기 (구매가의 50%)\n\n"
-# INVALID STRING REMOVED: "(기타)\n"
-# INVALID STRING REMOVED: "/출석 → 출석 보상 받기\n"
-# INVALID STRING REMOVED: "/가방, /상태\n\n"
-# INVALID STRING REMOVED: f"닉네임: [{get_title(user['level'])}] {user['nickname']}\n"
-# INVALID STRING REMOVED: "[상태]\n"
-# INVALID STRING REMOVED: f"Lv.{user['level']}  Exp: {user['exp']}/100\n"
-# INVALID STRING REMOVED: f"Gold: 💰{user['gold']} | 제한골드: 💰{user['limit_gold']}\n"
-# INVALID STRING REMOVED: "착용 낚싯대: 철제 낚싯대\n\n"
-# INVALID STRING REMOVED: f"{bag_text(user)}\n\n"
-# INVALID STRING REMOVED: f"{inventory_status}"
 
 def shop_text():
-# INVALID STRING REMOVED: """상점 UI 텍스트를 반환합니다."""
     return """🏪 상점
 
 [소모품]
@@ -202,10 +167,8 @@ def shop_text():
 예) /구매 지렁이 10
 
 판매: /판매 [이름] [수량]  (구매가의 50%)
-# INVALID STRING REMOVED: """
 
 def record_text(user):
-# INVALID STRING REMOVED: """잡은 물고기 기록을 텍스트로 만듭니다."""
     if not user["record"]:
         return "🎣 아직 잡은 물고기가 없습니다."
 
@@ -237,10 +200,6 @@ def handle_fishing(user, seconds):
     # 이미 낚시 중인지 확인
     if user.get("fishing_until", 0) > now:
         remain = int(user["fishing_until"] - now)
-# INVALID STRING REMOVED: f"\u2026뭔가 걸린 것 같다!!!\n\n"
-# INVALID STRING REMOVED: f"\U0001F3A3 낚시 성공! {fish_name} {length}cm ({size}어종) | 남은 {bait_type}: {remain_bait}개\n"
-# INVALID STRING REMOVED: f"가격: \U0001F4B0{gold} | 경험치 +{exp} | 장소: {user['place']}\n\n"
-# INVALID STRING REMOVED: f"{bag_text(user)}"
 
 
     # 미끼 1개 소모
@@ -274,26 +233,18 @@ def handle_fishing(user, seconds):
         user["gold"] += gold
 
         fish_obj = {"name": fish_name, "length": length, "size": size,
-# INVALID STRING REMOVED: "place": user["place"], "time": datetime.now(ZoneInfo("Asia/Seoul")).strftime("%Y-%m-%d %H:%M")}
         user["bag"].append(fish_obj)
         user["record"].append(fish_obj)
 
         user["fishing_until"] = 0  # 종료
 
-# INVALID STRING REMOVED: f"\u2026뭔가 걸린 것 같다!!!\n\n"
-# INVALID STRING REMOVED: f"\U0001F3A3 낚시 성공! {fish_name} {length}cm ({size}어종) | 남은 {bait_type}: {remain_bait}개\n"
-# INVALID STRING REMOVED: f"가격: \U0001F4B0{gold} | 경험치 +{exp} | 장소: {user['place']}\n\n"
-# INVALID STRING REMOVED: f"{bag_text(user)}"
 
     else:
         user["fishing_until"] = 0  # 종료
-# INVALID STRING REMOVED: f"\u2026뭔가 걸린 것 같다!!!\n\n"
-# INVALID STRING REMOVED: f"아쉽게도 놓쳤습니다\u2026 \U0001F3A3 (남은 {bait_type}: {remain_bait}개)"
 
 
 
 def handle_buy(user, name, amount_txt):
-# INVALID STRING REMOVED: """구매 로직을 처리합니다."""
     if name not in SHOP_PRICE:
         return "⚠️ 상점에 없는 품목입니다. '/상점'으로 목록을 확인하세요."
 
@@ -310,17 +261,14 @@ def handle_buy(user, name, amount_txt):
         used_limit = use
 
     if user["gold"] < price:
-# INVALID STRING REMOVED: f"⚠️ 골드가 부족합니다. (부족한 골드: {price - user['gold']})"
     user["gold"] -= price
 
     if name in user["inventory"]: user["inventory"][name] += amount
     elif name in user["items"]: user["items"][name] += amount
 
     txt_limit = f" (제한골드 {used_limit} 사용)" if used_limit else ""
-# INVALID STRING REMOVED: f"✅ 구매 완료: {name} x{amount}{txt_limit}\n남은 Gold: 💰{user['gold']}"
 
 def handle_sell(user, name, amount_txt):
-# INVALID STRING REMOVED: """판매 로직을 처리합니다."""
     amount = parse_amount(amount_txt)
     if amount <= 0: return "⚠️ 판매 수량을 올바르게 입력하세요."
 
@@ -337,10 +285,8 @@ def handle_sell(user, name, amount_txt):
 
     earn = SHOP_PRICE[name] * amount // 2
     user["gold"] += earn
-# INVALID STRING REMOVED: f"✅ 판매 완료: {name} x{amount} → 💰{earn}\n현재 Gold: 💰{user['gold']}"
 
 def check_in(user):
-# INVALID STRING REMOVED: """출석 보상 로직을 처리합니다."""
     today_str = datetime.now(ZoneInfo("Asia/Seoul")).strftime("%Y-%m-%d")
 
     if user.get("last_checkin") == today_str:
@@ -356,20 +302,16 @@ def check_in(user):
     if reward > 0:
         user["limit_gold"] += reward
         user["last_checkin"] = today_str
-# INVALID STRING REMOVED: f"✅ 출석 완료! ({title}) 제한골드 {reward}이 지급되었습니다.\n(현재 제한골드: {user['limit_gold']})"
 
     return "⚠️ 출석 보상을 지급할 수 없습니다."
 
 def set_place(user, place_txt):
-# INVALID STRING REMOVED: """장소 설정 로직을 처리합니다."""
     place = place_txt.strip()
     if place not in ("바다", "민물"):
         return "⚠️ 장소는 '바다' 또는 '민물'만 가능합니다."
     user["place"] = place
-# INVALID STRING REMOVED: f"🌊 낚시 장소가 [{place}]로 설정되었습니다."
 
 def set_nickname(user, nick):
-# INVALID STRING REMOVED: """닉네임 설정 로직을 처리합니다."""
     if user["nickname"]:
         return "⚠️ 닉네임은 이미 설정되어 있어 변경할 수 없습니다."
 
@@ -377,13 +319,10 @@ def set_nickname(user, nick):
     user["limit_gold"] += 2000
     return (
         f"✅ 닉네임 설정 완료: {user['nickname']}\n"
-# INVALID STRING REMOVED: f"보너스 2000골드(제한골드)가 지급되었습니다!\n\n"
-# INVALID STRING REMOVED: "👉 이제 '/도움말' 또는 '/'를 입력해서 게임을 시작해보세요!"
 
 # ---------------- 메인 명령어 핸들러 ----------------
 
 def handle_command(user_id, utter):
-# INVALID STRING REMOVED: """입력된 명령어를 분석하고 적절한 함수를 호출합니다."""
     user = get_user(user_id)
     parts = utter.strip().split()
     command = parts[0]
@@ -456,7 +395,6 @@ HTML_PAGE = """
 <!doctype html><html lang="ko"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/>
 <title>낚시 RPG 테스트</title><style>body{font-family:sans-serif;max-width:720px;margin:20px auto;padding:0 16px;line-height:1.6}h1{font-size:20px}input[type=text]{width:100%;padding:8px;font-size:16px;box-sizing:border-box;margin-bottom:10px;}pre{white-space:pre-wrap;background:#f0f0f0;padding:12px;border-radius:8px}button{padding:10px 14px;font-size:16px;cursor:pointer}</style></head>
 <body><h1>낚시 RPG - 테스트 콘솔</h1><form method="GET" action="/"><label>사용자 ID:</label><input type="text" name="user" placeholder="예: user1" value="user1"/><label>명령어 입력:</label><input type="text" name="utter" placeholder="예: /닉네임 낚시왕" autofocus/><button type="submit">실행</button></form>{RESULT}</body></html>
-# INVALID STRING REMOVED: """
 
 @app.route("/", methods=["GET", "HEAD"])
 def index():
