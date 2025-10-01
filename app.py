@@ -279,7 +279,7 @@ def handle_buy(user, name, amount_txt):
     elif name in user["items"]: user["items"][name] += amount
 
     txt_limit = f" (제한골드 {used_limit} 사용)" if used_limit else ""
-    return kakao_text_response()
+    return kakao_text_response(
         f"✅ 구매 완료: {name} x{amount}{txt_limit}\n남은 Gold: 💰{user['gold']}"
     )
 
